@@ -1,0 +1,843 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Fishtank</title>
+<style>
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #0b2342; }
+  canvas {
+    position: fixed; inset: 0; width: 100vw; height: 100vh; display: block;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+    cursor: crosshair;
+  }
+</style>
+</head>
+<body>
+<canvas id="tank"></canvas>
+<script>
+'use strict';
+
+/* ============================= CONFIG ====================================
+ * Tweak these to taste. Counts are per species; radii/speeds are in logical
+ * pixels (the scene is simulated at ~480x270 and upscaled to your screen).
+ * ======================================================================== */
+const CONFIG = {
+  logicalHeight: 270,     // internal pixel-art resolution (height)
+  fishCounts: { goldfish: 4, tetra: 8, angelfish: 3, clownfish: 4, pleco: 2 },
+  fleeRadius: 48,         // fish inside this range of the cursor swim away
+  panicRadius: 22,        // very close cursor => startled speed burst
+  foodSenseRadius: 165,   // fish inside this range of a pellet swim to it
+  maxPellets: 40,
+  pelletLifetime: 26,     // seconds before an uneaten pellet fades away
+  plantDensity: 80,       // one plant per this many logical px of width
+};
+
+const canvas = document.getElementById('tank');
+const ctx = canvas.getContext('2d');
+
+let W = 480, H = 270;       // logical size
+let groundY = 244;          // top of the gravel bed
+const SURFACE_Y = 6;        // waterline
+let t = 0;                  // global time (seconds)
+
+const stats = { eaten: 0 };
+
+/* ========================= small utilities ============================== */
+const rand = (a, b) => a + Math.random() * (b - a);
+const clamp = (v, a, b) => v < a ? a : (v > b ? b : v);
+
+const BAYER4 = [
+  [ 0,  8,  2, 10],
+  [12,  4, 14,  6],
+  [ 3, 11,  1,  9],
+  [15,  7, 13,  5],
+];
+
+function hexToRgb(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
+function shade(hex, f) { // f>1 lighter, f<1 darker
+  const [r, g, b] = hexToRgb(hex);
+  const c = v => clamp(Math.round(v * f), 0, 255);
+  return `rgb(${c(r)},${c(g)},${c(b)})`;
+}
+
+/* ========================= sprite building ==============================
+ * Sprites are painted pixel-by-pixel into a grid, given an automatic
+ * 1px outline, and baked to an offscreen canvas. No image files needed.
+ * ======================================================================== */
+function buildSprite(w, h, paint, outlineColor) {
+  const grid = Array.from({ length: h }, () => new Array(w).fill(null));
+  const set = (x, y, c) => {
+    x = Math.round(x); y = Math.round(y);
+    if (x >= 0 && x < w && y >= 0 && y < h && c) grid[y][x] = c;
+  };
+  const get = (x, y) => (x >= 0 && x < w && y >= 0 && y < h) ? grid[y][x] : null;
+  paint(set, get);
+
+  if (outlineColor) {
+    const edges = [];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      if (!grid[y][x]) continue;
+      if (!get(x - 1, y) || !get(x + 1, y) || !get(x, y - 1) || !get(x, y + 1)) edges.push([x, y]);
+    }
+    for (const [x, y] of edges) grid[y][x] = outlineColor;
+  }
+
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (grid[y][x]) { g.fillStyle = grid[y][x]; g.fillRect(x, y, 1, 1); }
+  }
+  return c;
+}
+
+function fillEllipse(set, cx, cy, rx, ry, colorFn) {
+  for (let y = Math.floor(cy - ry); y <= Math.ceil(cy + ry); y++) {
+    const tv = (y - cy) / ry;
+    if (Math.abs(tv) > 1) continue;
+    const half = rx * Math.sqrt(1 - tv * tv);
+    for (let x = Math.round(cx - half); x <= Math.round(cx + half); x++) {
+      const col = colorFn(x, y, tv);
+      if (col) set(x, y, col);
+    }
+  }
+}
+
+// Vertical shading ramp (dark back -> light belly) with Bayer dithering.
+function shadeRamp(ramp) {
+  return (x, y, tv) => {
+    const u = (tv + 1) / 2;
+    const f = u * ramp.length;
+    let i = Math.floor(f);
+    if ((f - i) > BAYER4[y & 3][x & 3] / 16) i++;
+    return ramp[clamp(i, 0, ramp.length - 1)];
+  };
+}
+
+/* ------------------------- species painters ---------------------------- */
+/* All fish are authored facing RIGHT; rendering mirrors them per-column.  */
+
+function paintGoldfish(set, get) {
+  const body = shadeRamp(['#c9671c', '#ef8f2b', '#ffb144', '#ffcf7a', '#ffe8b0']);
+  // flowy double tail
+  for (let x = 0; x <= 7; x++) {
+    const tv = (7 - x) / 7;
+    const spread = 1 + Math.round(tv * 5);
+    const gap = tv > 0.45 ? Math.round(tv * 2) : 0;
+    for (let dy = -spread; dy <= spread; dy++) {
+      if (Math.abs(dy) < gap) continue;
+      set(x, 8 + dy, ((x + dy) & 1) ? '#ef8f2b' : '#ffcf7a');
+    }
+  }
+  fillEllipse(set, 15, 8, 8.5, 5, body);
+  // dorsal fin
+  for (let x = 11; x <= 16; x++) {
+    const u = (x - 15) / 8.5;
+    const top = 8 - 5 * Math.sqrt(Math.max(0, 1 - u * u));
+    const hgt = Math.max(1, Math.round(2.6 - Math.abs(x - 13.5) * 0.7));
+    for (let k = 1; k <= hgt; k++) set(x, Math.round(top) - k, (k === hgt) ? '#ef8f2b' : '#ffb144');
+  }
+  // gill line + pectoral fin
+  set(17, 6, '#e0801f'); set(17, 7, '#e0801f'); set(17, 9, '#e0801f');
+  set(13, 11, '#ffcf7a'); set(14, 11, '#ffb144'); set(14, 12, '#ef8f2b');
+  // eye
+  set(19, 6, '#ffffff'); set(20, 6, '#2b1608'); set(19, 5, '#fff3d8');
+  // mouth
+  set(23, 9, '#a04a12');
+}
+
+function paintTetra(set, get) {
+  fillEllipse(set, 6, 3, 5.4, 2.4, (x, y) => {
+    if (y <= 1) return '#44707e';
+    if (y === 2) return x >= 8 ? '#b9fbff' : '#59ecff';   // neon stripe
+    if (y === 3) return x <= 6 ? '#ff4753' : '#cfd9dc';   // red rear stripe
+    return '#eef4f5';
+  });
+  for (let x = 0; x <= 1; x++) {                          // little tail
+    const s = 1 + (1 - x);
+    for (let dy = -s; dy <= s; dy++) set(x, 3 + dy, '#a7bcc2');
+  }
+  set(10, 2, '#0d1a20');                                  // eye
+}
+
+function paintAngelfish(set, get) {
+  const cx = 10, cy = 13, rx = 6.2, ry = 6.5;
+  const body = shadeRamp(['#9aa5b1', '#bcc7d0', '#dde4ea', '#f1f5f7', '#fdf6d8']);
+  const finD = '#c9b568', finL = '#e8dc96';
+  const topAt = x => {
+    const u = (x - cx) / rx;
+    return Math.abs(u) > 1 ? null : cy - ry * Math.sqrt(1 - u * u);
+  };
+  // tail fan
+  for (let x = 0; x <= 4; x++) {
+    const spread = 2 + (4 - x);
+    for (let dy = -spread; dy <= spread; dy++) set(x, cy + dy, ((x + dy) & 1) ? finD : finL);
+  }
+  // tall dorsal + anal sails
+  for (let x = 5; x <= 13; x++) {
+    const top = topAt(x); if (top == null) continue;
+    const hgt = Math.max(0, Math.round(6 - Math.abs(x - 8.5) * 1.3));
+    for (let k = 1; k <= hgt; k++) {
+      set(x, Math.round(top) - k, (k === hgt || ((x + k) & 1)) ? finD : finL);
+      set(x, Math.round(cy + (cy - top)) + k, (k === hgt || ((x + k) & 1)) ? finD : finL);
+    }
+  }
+  // ventral streamers
+  set(11, 20, finD); set(10, 21, finD); set(10, 22, finD); set(9, 23, finD); set(9, 24, finD);
+  fillEllipse(set, cx, cy, rx, ry, body);
+  // vertical bars (dithered edges)
+  for (let y = 0; y < 26; y++) {
+    if (get(7, y) && (y & 1)) set(7, y, '#474d55');
+    if (get(8, y)) set(8, y, '#474d55');
+    if (get(12, y)) set(12, y, '#474d55');
+    if (get(13, y) && !(y & 1)) set(13, y, '#474d55');
+  }
+  // snout + mouth
+  set(17, 12, '#dde4ea'); set(17, 13, '#c9a37a'); set(17, 14, '#bcc7d0');
+  // eye
+  set(14, 10, '#ffffff'); set(15, 10, '#14181d');
+}
+
+function paintClownfish(set, get) {
+  fillEllipse(set, 9, 5, 7.2, 4.2, shadeRamp(['#e35d16', '#f97b1f', '#ff9440', '#ffb066', '#ffd0a0']));
+  for (let x = 0; x <= 2; x++) {                          // tail fan
+    const s = 1 + (2 - x);
+    for (let dy = -s; dy <= s; dy++) set(x, 5 + dy, '#ff9440');
+  }
+  // dorsal fin
+  for (let x = 6; x <= 11; x++) {
+    const u = (x - 9) / 7.2;
+    const top = 5 - 4.2 * Math.sqrt(Math.max(0, 1 - u * u));
+    for (let k = 1; k <= 2; k++) set(x, Math.round(top) - k, k === 2 ? '#f97b1f' : '#ffb066');
+  }
+  // white bands with dark borders (border via neighbours)
+  const band = (x0, x1) => {
+    for (let x = x0; x <= x1; x++) for (let y = 0; y < 11; y++) {
+      if (get(x, y)) set(x, y, y <= 2 ? '#d8dee2' : '#f8f8f4');
+    }
+    for (const bx of [x0 - 1, x1 + 1]) for (let y = 0; y < 11; y++) {
+      if (get(bx, y)) set(bx, y, '#241207');
+    }
+  };
+  band(11, 12); band(6, 7); band(2, 3);
+  // pectoral fin
+  set(9, 7, '#f97b1f'); set(10, 7, '#ffb066');
+  // eye
+  set(14, 3, '#f8f8f4'); set(15, 3, '#1b0e05');
+}
+
+function paintPleco(set, get) {
+  const tops = [6, 6, 5, 5, 4, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5];
+  // big dorsal sail
+  const sail = { 7: 2, 8: 3, 9: 4, 10: 4, 11: 4, 12: 3, 13: 2, 14: 1 };
+  for (const xs in sail) {
+    const x = +xs;
+    for (let k = 1; k <= sail[xs]; k++) {
+      set(x, tops[x] - k, ((x * 13 + k * 7) % 5 === 0) ? '#443e2c' : '#6b6242');
+    }
+  }
+  for (let x = 0; x < 24; x++) {
+    const top = tops[x], bottom = (x <= 2) ? 7 : 8;
+    for (let y = top; y <= bottom; y++) {
+      const d = (y - top) / Math.max(1, bottom - top);
+      let c = d < 0.3 ? '#57503a' : (d < 0.7 ? '#7a7048' : '#9c9166');
+      if ((x * 13 + y * 7) % 6 === 0) c = '#443e2c';       // spots
+      set(x, y, c);
+    }
+  }
+  // tail fan
+  for (let dy = 4; dy <= 9; dy++) set(0, dy, '#6b6242');
+  for (let dy = 5; dy <= 8; dy++) set(1, dy, '#7a7048');
+  // pectoral fins resting on the ground
+  set(16, 9, '#57503a'); set(17, 9, '#57503a'); set(6, 9, '#57503a'); set(7, 9, '#57503a');
+  // sucker mouth + eye
+  set(21, 9, '#3a3324'); set(22, 9, '#3a3324'); set(22, 8, '#2c2718');
+  set(20, 3, '#101008'); set(20, 2, '#c9c090');
+}
+
+function paintChest(set, get) {
+  // rounded lid
+  const insets = [4, 2, 1, 0, 0];
+  for (let y = 0; y <= 4; y++) {
+    for (let x = insets[y]; x < 18 - insets[y]; x++) {
+      let c = y === 0 ? '#a06a38' : '#8a5a2e';
+      if (x % 5 === 4) c = '#6b3d1c';                      // wood grain
+      set(x, y, c);
+    }
+  }
+  for (let x = 0; x < 18; x++) set(x, 5, '#e0b23c');       // gold rim
+  // box
+  for (let y = 6; y <= 12; y++) for (let x = 0; x < 18; x++) {
+    let c = '#7a4a22';
+    if (y === 6) c = '#8a5a2e';
+    if (y === 12) c = '#552f14';
+    if (x % 6 === 5) c = '#63381a';
+    set(x, y, c);
+  }
+  for (let y = 5; y <= 12; y++) { set(1, y, '#c89a30'); set(16, y, '#c89a30'); }
+  // lock
+  set(8, 5, '#f2cd5e'); set(9, 5, '#f2cd5e');
+  set(8, 6, '#e0b23c'); set(9, 6, '#4a2c0c');
+  set(8, 7, '#c89a30'); set(9, 7, '#c89a30');
+}
+
+function paintPellet(set) {
+  set(0, 0, '#b58048'); set(1, 0, '#8a5a2b'); set(2, 0, '#8a5a2b');
+  set(0, 1, '#8a5a2b'); set(1, 1, '#9c6832'); set(2, 1, '#6f4721');
+  set(0, 2, '#8a5a2b'); set(1, 2, '#6f4721'); set(2, 2, '#5e3b1a');
+}
+
+/* ------------------------- species registry ---------------------------- */
+const SPECIES = {
+  goldfish:  { w: 26, h: 16, paint: paintGoldfish,  outline: '#7a3a10', cruise: 14, max: 30, accel: 55, wiggle: 1.6, band: [0.10, 0.72], mouthDy: 0 },
+  tetra:     { w: 12, h: 7,  paint: paintTetra,     outline: '#3c545e', cruise: 20, max: 46, accel: 90, wiggle: 1.0, band: [0.12, 0.58], mouthDy: 0, school: true },
+  angelfish: { w: 20, h: 26, paint: paintAngelfish, outline: '#4c565f', cruise: 9,  max: 21, accel: 38, wiggle: 1.1, band: [0.18, 0.68], mouthDy: 0 },
+  clownfish: { w: 18, h: 11, paint: paintClownfish, outline: '#2a1408', cruise: 15, max: 38, accel: 75, wiggle: 1.5, band: [0.25, 0.82], mouthDy: 0 },
+  pleco:     { w: 24, h: 10, paint: paintPleco,     outline: '#33301f', cruise: 3,  max: 16, accel: 25, wiggle: 0.5, band: [0.96, 1.0],  mouthDy: 4, fleeR: 18, bottom: true },
+};
+for (const name in SPECIES) {
+  const sp = SPECIES[name];
+  sp.name = name;
+  sp.sprite = buildSprite(sp.w, sp.h, sp.paint, sp.outline);
+}
+const PELLET_SPRITE = buildSprite(3, 3, paintPellet, null);
+const CHEST_SPRITE = buildSprite(18, 13, paintChest, '#3a2410');
+
+/* ============================== fish ==================================== */
+const fish = [];
+let tetras = [];
+
+class Fish {
+  constructor(sp) {
+    this.sp = sp;
+    const [bt, bb] = this.bandRange();
+    this.x = rand(30, W - 30);
+    this.y = rand(bt, bb);
+    this.vx = rand(-1, 1) * sp.cruise;
+    this.vy = 0;
+    this.facing = this.vx >= 0 ? 1 : -1;
+    this.phase = rand(0, Math.PI * 2);
+    this.target = null;
+    this.targetT = 0;
+    this.startleT = 0;
+    this.gulpT = 0;
+    this.eager = rand(0.7, 1.3);
+    this.bubbleT = rand(4, 20);
+    this.huntTarget = null;
+  }
+
+  bandRange() {
+    const top = 14, bot = groundY - 4;
+    return [top + this.sp.band[0] * (bot - top), top + this.sp.band[1] * (bot - top)];
+  }
+
+  update(dt) {
+    const sp = this.sp;
+    let ax = 0, ay = 0;
+    let maxSpeed = sp.cruise;
+
+    // --- wander toward a roaming target
+    this.targetT -= dt;
+    if (!this.target || this.targetT <= 0 ||
+        (this.target.x - this.x) ** 2 + (this.target.y - this.y) ** 2 < 144) {
+      const [bt, bb] = this.bandRange();
+      this.target = { x: rand(22, W - 22), y: rand(bt, bb) };
+      this.targetT = rand(4, 9);
+    }
+    {
+      const dx = this.target.x - this.x, dy = this.target.y - this.y;
+      const d = Math.hypot(dx, dy) || 1;
+      ax += dx / d * sp.accel * 0.5;
+      ay += dy / d * sp.accel * 0.5;
+    }
+
+    // --- food: seek the nearest edible pellet in sensing range
+    this.huntTarget = null;
+    let best = null, bd2 = CONFIG.foodSenseRadius ** 2;
+    for (const p of pellets) {
+      if (p.dead || p.fading) continue;
+      if (sp.bottom && !p.landed && p.y < groundY - 45) continue; // pleco waits for it to sink
+      const d2 = (p.x - this.x) ** 2 + (p.y - this.y) ** 2;
+      if (d2 < bd2) { bd2 = d2; best = p; }
+    }
+    if (best) {
+      const d = Math.sqrt(bd2) || 1;
+      ax += (best.x - this.x) / d * sp.accel * 1.7 * this.eager;
+      ay += (best.y - this.y) / d * sp.accel * 1.7 * this.eager;
+      maxSpeed = sp.max;
+      this.huntTarget = best;
+    }
+
+    // --- cursor flee (stronger than hunger up close)
+    if (cursor.present) {
+      const dx = this.x - cursor.x, dy = this.y - cursor.y;
+      const d = Math.hypot(dx, dy);
+      const R = sp.fleeR || CONFIG.fleeRadius;
+      if (d < R && d > 0.001) {
+        const s = 1 - d / R;
+        ax += dx / d * 260 * s * s;
+        ay += dy / d * 260 * s * s;
+        maxSpeed = sp.max;
+        if (d < CONFIG.panicRadius && this.startleT <= 0) this.startleT = 0.9;
+      }
+    }
+    if (this.startleT > 0) { this.startleT -= dt; maxSpeed = sp.max * 1.6; }
+
+    // --- schooling (tetras)
+    if (sp.school) {
+      let cx = 0, cy = 0, avx = 0, avy = 0, n = 0;
+      for (const o of tetras) {
+        if (o === this) continue;
+        const d2 = (o.x - this.x) ** 2 + (o.y - this.y) ** 2;
+        if (d2 < 38 * 38) {
+          cx += o.x; cy += o.y; avx += o.vx; avy += o.vy; n++;
+          if (d2 < 64) {
+            const d = Math.sqrt(d2) || 0.01;
+            ax += (this.x - o.x) / d * 120;
+            ay += (this.y - o.y) / d * 120;
+          }
+        }
+      }
+      if (n) {
+        ax += (cx / n - this.x) * 1.2; ay += (cy / n - this.y) * 1.2;
+        ax += (avx / n - this.vx) * 1.5; ay += (avy / n - this.vy) * 1.5;
+      }
+    }
+
+    // --- soft walls & preferred depth band
+    const m = 16;
+    if (this.x < m) ax += (m - this.x) * 10;
+    if (this.x > W - m) ax -= (this.x - (W - m)) * 10;
+    const topB = 12, botB = sp.bottom ? groundY + 2 : groundY - 6;
+    if (this.y < topB) ay += (topB - this.y) * 10;
+    if (this.y > botB) ay -= (this.y - botB) * 10;
+    const [bt, bb] = this.bandRange();
+    if (this.y < bt) ay += (bt - this.y) * 0.8;
+    else if (this.y > bb) ay -= (this.y - bb) * 0.8;
+
+    // --- integrate with drag + gradual speed cap
+    this.vx += ax * dt; this.vy += ay * dt;
+    this.vx /= (1 + 0.9 * dt); this.vy /= (1 + 0.9 * dt);
+    const spd = Math.hypot(this.vx, this.vy);
+    if (spd > maxSpeed) {
+      const target = Math.max(maxSpeed, spd * (1 - 2.5 * dt));
+      this.vx *= target / spd; this.vy *= target / spd;
+    }
+    this.x += this.vx * dt; this.y += this.vy * dt;
+    this.x = clamp(this.x, 4, W - 4);
+    this.y = clamp(this.y, 8, groundY + 4);
+
+    if (this.vx > 3) this.facing = 1;
+    else if (this.vx < -3) this.facing = -1;
+    this.phase += dt * (2.2 + Math.hypot(this.vx, this.vy) * 0.3);
+    if (this.gulpT > 0) this.gulpT -= dt;
+
+    // --- eat
+    if (this.huntTarget && !this.huntTarget.dead) {
+      const mx = this.x + this.facing * (sp.w / 2 - 2);
+      const my = this.y + sp.mouthDy;
+      const p = this.huntTarget;
+      if ((p.x - mx) ** 2 + (p.y - my) ** 2 < 18) eatPellet(p, this);
+    }
+
+    // --- occasional bubble from the mouth
+    this.bubbleT -= dt;
+    if (this.bubbleT <= 0) {
+      this.bubbleT = rand(7, 24);
+      if (Math.random() < 0.6) spawnBubble(this.x + this.facing * (sp.w / 2 - 2), this.y - 1, 1);
+    }
+  }
+
+  draw() {
+    const sp = this.sp, spr = sp.sprite, w = sp.w, h = sp.h;
+    const bx = Math.round(this.x - w / 2), by = Math.round(this.y - h / 2);
+    // column-sheared draw: the tail end wiggles, the head stays steady
+    for (let col = 0; col < w; col++) {
+      const srcX = this.facing === 1 ? col : w - 1 - col;
+      const tailness = 1 - srcX / (w - 1);
+      const wig = Math.round(Math.sin(this.phase + tailness * 3.2) * sp.wiggle * tailness * tailness * 2.2);
+      ctx.drawImage(spr, srcX, 0, 1, h, bx + col, by + wig, 1, h);
+    }
+    if (this.gulpT > 0) {          // open mouth while gulping
+      const mx = Math.round(this.x + this.facing * (w / 2 - 1));
+      const my = Math.round(this.y + sp.mouthDy);
+      ctx.fillStyle = '#1c0f06';
+      ctx.fillRect(mx, my, 1, 2);
+    }
+  }
+}
+
+/* ============================== food ==================================== */
+const pellets = [];
+
+function dropFood(x, y) {
+  if (pellets.filter(p => !p.dead).length >= CONFIG.maxPellets) return;
+  pellets.push({
+    x: clamp(x, 6, W - 6),
+    y: clamp(y, SURFACE_Y + 2, groundY),
+    vy: 3, age: 0, wob: rand(0, Math.PI * 2),
+    landed: false, fading: false, dead: false, alpha: 1,
+  });
+}
+
+function eatPellet(p, f) {
+  if (p.dead) return;
+  p.dead = true;
+  stats.eaten++;
+  f.gulpT = 0.45;
+  for (let i = 0; i < 6; i++) {
+    particles.push({
+      x: p.x, y: p.y, vx: rand(-10, 10), vy: rand(-14, 2), g: 22,
+      life: rand(0.4, 0.9), maxLife: 0.9, color: '#8a5a2b',
+    });
+  }
+  spawnBubble(p.x, p.y - 2, 1);
+}
+
+function updatePellets(dt) {
+  for (const p of pellets) {
+    if (p.dead) continue;
+    p.age += dt;
+    if (!p.landed) {
+      p.vy = Math.min(p.vy + 10 * dt, 14);
+      p.y += p.vy * dt;
+      p.x += Math.sin(p.age * 3 + p.wob) * 3 * dt;
+      if (p.y >= groundY + 2) { p.y = groundY + 2; p.landed = true; }
+    }
+    if (p.age > CONFIG.pelletLifetime) {
+      p.fading = true;
+      p.alpha = 1 - (p.age - CONFIG.pelletLifetime) / 3;
+      if (p.alpha <= 0) p.dead = true;
+    }
+  }
+  for (let i = pellets.length - 1; i >= 0; i--) if (pellets[i].dead) pellets.splice(i, 1);
+}
+
+function drawPellets() {
+  for (const p of pellets) {
+    if (p.dead) continue;
+    ctx.globalAlpha = p.alpha;
+    ctx.drawImage(PELLET_SPRITE, Math.round(p.x) - 1, Math.round(p.y) - 1);
+    ctx.globalAlpha = 1;
+  }
+}
+
+/* ======================= bubbles & particles ============================ */
+const bubbles = [];
+const particles = [];
+
+function spawnBubble(x, y, r) {
+  if (bubbles.length > 120) return;
+  bubbles.push({ x, y, vy: rand(10, 22), r, wob: rand(0, Math.PI * 2), age: 0 });
+}
+
+function updateBubbles(dt) {
+  for (let i = bubbles.length - 1; i >= 0; i--) {
+    const b = bubbles[i];
+    b.age += dt;
+    b.y -= b.vy * dt;
+    b.x += Math.sin(b.age * 4 + b.wob) * 6 * dt;
+    if (b.y <= SURFACE_Y) bubbles.splice(i, 1);
+  }
+}
+
+function drawBubbles() {
+  for (const b of bubbles) {
+    const x = Math.round(b.x), y = Math.round(b.y);
+    if (b.r <= 1) {
+      ctx.fillStyle = 'rgba(214,240,248,0.75)';
+      ctx.fillRect(x, y, 1, 1);
+    } else {
+      ctx.fillStyle = 'rgba(190,228,240,0.55)';
+      ctx.fillRect(x - 1, y - 1, 2, 2);
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.fillRect(x - 1, y - 1, 1, 1);
+    }
+  }
+}
+
+function updateParticles(dt) {
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.life -= dt;
+    if (p.life <= 0) { particles.splice(i, 1); continue; }
+    p.vy += p.g * dt;
+    p.x += p.vx * dt; p.y += p.vy * dt;
+  }
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.globalAlpha = clamp(p.life / p.maxLife, 0, 1);
+    ctx.fillStyle = p.color;
+    ctx.fillRect(Math.round(p.x), Math.round(p.y), 1, 1);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ========================== environment ================================= */
+let bgCanvas = null;
+let plants = [];
+let vents = [];
+let motes = [];
+let rays = [];
+let chestX = 0, chestY = 0, chestBurpT = 8;
+
+const WATER_STOPS = ['#9fe8ee', '#7fd8e2', '#5fc0d6', '#46a5c6', '#3489b2', '#286f9c', '#1e5786', '#164370', '#10345c'];
+const PLANT_GREENS = [['#1e5a33', '#2f8048', '#49a862'], ['#174c3a', '#256e50', '#3b9468'], ['#5e2f44', '#7c4058', '#96536c']];
+
+function buildBackground() {
+  bgCanvas = document.createElement('canvas');
+  bgCanvas.width = W; bgCanvas.height = H;
+  const g = bgCanvas.getContext('2d');
+
+  // dithered water gradient
+  for (let y = 0; y < groundY; y++) {
+    for (let x = 0; x < W; x++) {
+      const f = y / groundY * (WATER_STOPS.length - 1);
+      let i = Math.floor(f);
+      if ((f - i) > BAYER4[y & 3][x & 3] / 16) i++;
+      g.fillStyle = WATER_STOPS[clamp(i, 0, WATER_STOPS.length - 1)];
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  // brighter surface band
+  g.fillStyle = '#c4f0f4';
+  for (let x = 0; x < W; x++) if ((x & 3) !== 3) g.fillRect(x, 0, 1, 1);
+
+  // distant kelp silhouettes
+  const silCount = Math.max(5, Math.round(W / 70));
+  for (let s = 0; s < silCount; s++) {
+    const sx = rand(6, W - 6), hgt = rand(40, 110), ph = rand(0, 9);
+    g.fillStyle = '#16465e';
+    for (let y = groundY; y > groundY - hgt; y--) {
+      const off = Math.round(Math.sin(ph + (groundY - y) * 0.06) * 3);
+      g.fillRect(Math.round(sx) + off, y, 2, 1);
+    }
+  }
+
+  // gravel bed
+  const gravelRamp = ['#a8905f', '#93794c', '#7d6640', '#665233'];
+  for (let y = groundY; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      const f = (y - groundY) / (H - groundY) * (gravelRamp.length - 1);
+      let i = Math.floor(f);
+      if ((f - i) > BAYER4[y & 3][x & 3] / 16) i++;
+      let c = gravelRamp[clamp(i, 0, gravelRamp.length - 1)];
+      if (Math.random() < 0.06) c = Math.random() < 0.5 ? '#bfa670' : '#57452a';
+      g.fillStyle = c;
+      g.fillRect(x, y, 1, 1);
+    }
+  }
+  // gravel top highlight
+  g.fillStyle = '#c2ab74';
+  for (let x = 0; x < W; x++) if ((x + (x >> 2)) & 1) g.fillRect(x, groundY, 1, 1);
+
+  // pebbles
+  const pebbleCols = ['#8d8577', '#7d7568', '#96684a', '#6e7d85', '#85919b'];
+  const nPebbles = Math.round(W / 8);
+  for (let i = 0; i < nPebbles; i++) {
+    const px = rand(3, W - 3), py = rand(groundY + 3, H - 3);
+    const prx = rand(1.5, 3.5), pry = rand(1, 2);
+    const base = pebbleCols[Math.floor(rand(0, pebbleCols.length))];
+    for (let y = Math.round(py - pry); y <= Math.round(py + pry); y++) {
+      const tv = (y - py) / pry;
+      if (Math.abs(tv) > 1) continue;
+      const half = prx * Math.sqrt(1 - tv * tv);
+      for (let x = Math.round(px - half); x <= Math.round(px + half); x++) {
+        g.fillStyle = tv < -0.4 ? shade(base, 1.25) : (tv > 0.5 ? shade(base, 0.7) : base);
+        g.fillRect(x, y, 1, 1);
+      }
+    }
+  }
+}
+
+function initDecor() {
+  plants = [];
+  const n = Math.max(4, Math.round(W / CONFIG.plantDensity));
+  for (let i = 0; i < n; i++) {
+    plants.push({
+      x: Math.round(rand(8, W - 8)),
+      height: rand(50, 130),
+      phase: rand(0, Math.PI * 2),
+      cols: PLANT_GREENS[Math.floor(rand(0, PLANT_GREENS.length))],
+    });
+  }
+  vents = [];
+  for (let i = 0; i < 3; i++) {
+    vents.push({ x: rand(20, W - 20), t: rand(0.5, 2) });
+  }
+  motes = [];
+  for (let i = 0; i < 30; i++) {
+    motes.push({ x: rand(0, W), y: rand(10, groundY - 5), vx: rand(-1.5, 1.5), vy: rand(-1, 1), ph: rand(0, 9) });
+  }
+  rays = [];
+  for (let i = 0; i < 4; i++) {
+    rays.push({ x0: rand(0, W), w: rand(24, 55), phase: rand(0, Math.PI * 2) });
+  }
+  chestX = Math.round(W * 0.72);
+  chestY = groundY - 11;
+}
+
+function drawRays() {
+  for (const r of rays) {
+    const sway = Math.sin(t * 0.12 + r.phase) * 10;
+    for (let y = 0; y < groundY; y += 2) {
+      const a = 0.07 * (1 - y / groundY) * (0.7 + 0.3 * Math.sin(t * 0.6 + r.phase * 3));
+      if (a <= 0.004) continue;
+      ctx.fillStyle = `rgba(215,242,255,${a.toFixed(3)})`;
+      ctx.fillRect(Math.round(r.x0 + sway + y * 0.35), y, Math.round(r.w), 2);
+    }
+  }
+}
+
+function drawPlants() {
+  for (const pl of plants) {
+    // each plant is a cluster of 3 swaying blades of different heights
+    for (let b = 0; b < 3; b++) {
+      const bh = pl.height * (b === 0 ? 1 : b === 1 ? 0.65 : 0.45);
+      const bx = pl.x + (b === 1 ? 2 : b === 2 ? -2 : 0);
+      const topY = groundY - bh;
+      for (let py = groundY; py > topY; py--) {
+        const hFrac = (groundY - py) / bh;
+        const xoff = Math.round(Math.sin(t * 0.9 + pl.phase + b * 1.7 + hFrac * 3) * 3 * hFrac);
+        const x = bx + xoff;
+        ctx.fillStyle = pl.cols[1];
+        ctx.fillRect(x, py, 1, 1);
+        if ((py & 1) === 0) {                   // leaf pairs alternating sides
+          const side = ((py >> 1) & 1) ? 1 : -1;
+          const len = (py % 6 === 0) ? 2 : 1;
+          for (let k = 1; k <= len; k++) {
+            ctx.fillStyle = (k === len) ? pl.cols[2] : pl.cols[0];
+            ctx.fillRect(x + side * k, py, 1, 1);
+          }
+        }
+      }
+    }
+  }
+}
+
+function drawMotes() {
+  ctx.fillStyle = 'rgba(220,240,250,0.16)';
+  for (const mo of motes) {
+    ctx.fillRect(Math.round(mo.x), Math.round(mo.y), 1, 1);
+  }
+}
+
+function drawSurface() {
+  for (let x = 0; x < W; x++) {
+    const v = Math.sin(x * 0.7 + t * 1.3) + Math.sin(x * 0.23 - t * 0.7);
+    if (v > 1.1) {
+      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillRect(x, 2, 1, 1);
+      if (v > 1.6) ctx.fillRect(x, 1, 1, 1);
+    }
+  }
+}
+
+function updateEnvironment(dt) {
+  for (const v of vents) {
+    v.t -= dt;
+    if (v.t <= 0) {
+      v.t = rand(0.6, 2.5);
+      spawnBubble(v.x + rand(-2, 2), groundY - 1, Math.random() < 0.4 ? 2 : 1);
+    }
+  }
+  chestBurpT -= dt;
+  if (chestBurpT <= 0) {
+    chestBurpT = rand(7, 15);
+    for (let i = 0; i < 5; i++) {
+      setTimeout(() => spawnBubble(chestX + 9 + rand(-3, 3), chestY + 4, Math.random() < 0.5 ? 2 : 1), i * 90);
+    }
+  }
+  for (const mo of motes) {
+    mo.x += (mo.vx + Math.sin(t * 0.3 + mo.ph) * 0.8) * dt;
+    mo.y += mo.vy * dt;
+    if (mo.x < 0) mo.x += W; if (mo.x > W) mo.x -= W;
+    if (mo.y < 8) mo.y = groundY - 6;
+    if (mo.y > groundY - 2) mo.y = 10;
+  }
+}
+
+/* ============================ input ===================================== */
+const cursor = { x: -999, y: -999, present: false };
+
+function toLogical(e) {
+  return { x: e.clientX / window.innerWidth * W, y: e.clientY / window.innerHeight * H };
+}
+window.addEventListener('mousemove', e => {
+  const p = toLogical(e);
+  cursor.x = p.x; cursor.y = p.y; cursor.present = true;
+});
+window.addEventListener('mouseout', () => { cursor.present = false; });
+window.addEventListener('blur', () => { cursor.present = false; });
+window.addEventListener('pointerdown', e => {
+  const p = toLogical(e);
+  dropFood(p.x, p.y);
+});
+
+/* ============================ lifecycle ================================= */
+function resize() {
+  H = CONFIG.logicalHeight;
+  W = Math.max(240, Math.round(H * window.innerWidth / Math.max(1, window.innerHeight)));
+  canvas.width = W; canvas.height = H;
+  ctx.imageSmoothingEnabled = false;
+  groundY = H - 26;
+  buildBackground();
+  initDecor();
+  for (const f of fish) { f.x = clamp(f.x, 6, W - 6); f.y = clamp(f.y, 10, groundY); f.target = null; }
+  for (const p of pellets) { p.x = clamp(p.x, 6, W - 6); p.y = clamp(p.y, 8, groundY + 2); }
+}
+window.addEventListener('resize', resize);
+resize();
+
+// populate the tank (draw order: bottom dwellers first, small fish in front)
+for (const name of ['pleco', 'angelfish', 'goldfish', 'clownfish', 'tetra']) {
+  for (let i = 0; i < (CONFIG.fishCounts[name] || 0); i++) fish.push(new Fish(SPECIES[name]));
+}
+tetras = fish.filter(f => f.sp.school);
+
+function render() {
+  ctx.drawImage(bgCanvas, 0, 0);
+  drawRays();
+  ctx.drawImage(CHEST_SPRITE, chestX, chestY);
+  drawPlants();
+  drawMotes();
+  drawPellets();
+  for (const f of fish) f.draw();
+  drawBubbles();
+  drawParticles();
+  drawSurface();
+}
+
+let last = performance.now();
+function frame(now) {
+  let dt = (now - last) / 1000;
+  last = now;
+  dt = Math.min(dt, 0.05);
+  t += dt;
+  for (const f of fish) f.update(dt);
+  updatePellets(dt);
+  updateBubbles(dt);
+  updateParticles(dt);
+  updateEnvironment(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* ======================= debug / test hooks ============================= */
+window.__fishtank = {
+  get fish() { return fish.map(f => ({ x: f.x, y: f.y, species: f.sp.name })); },
+  get pellets() { return pellets.filter(p => !p.dead).length; },
+  get pelletsEaten() { return stats.eaten; },
+  get size() { return { W, H }; },
+  dropFood,
+};
+</script>
+</body>
+</html>
