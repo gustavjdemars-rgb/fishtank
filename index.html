@@ -805,8 +805,8 @@ function initDecor() {
   const n = Math.max(4, Math.round(W / CONFIG.plantDensity));
   for (let i = 0; i < n; i++) {
     plants.push({
-      x: Math.round(rand(8, W - 8)),
-      height: rand(50, 130),
+      x: Math.round(rand(10, W - 10)),
+      height: rand(75, 175),
       phase: rand(0, Math.PI * 2),
       cols: PLANT_GREENS[Math.floor(rand(0, PLANT_GREENS.length))],
     });
@@ -843,26 +843,37 @@ function drawRays() {
   }
 }
 
+const BLADE_H = [1, 0.8, 0.6, 0.45, 0.3];
+const BLADE_X = [0, 3, -3, 5, -5];
+
 function drawPlants() {
   for (const pl of plants) {
-    // each plant is a cluster of 3 swaying blades of different heights
-    for (let b = 0; b < 3; b++) {
-      const bh = pl.height * (b === 0 ? 1 : b === 1 ? 0.65 : 0.45);
-      const bx = pl.x + (b === 1 ? 2 : b === 2 ? -2 : 0);
+    // each plant is a bush of 5 swaying blades of different heights
+    for (let b = 0; b < 5; b++) {
+      const bh = pl.height * BLADE_H[b];
+      const bx = pl.x + BLADE_X[b];
       const topY = groundY - bh;
       for (let py = groundY; py > topY; py--) {
         const hFrac = (groundY - py) / bh;
-        const xoff = Math.round(Math.sin(t * 0.9 + pl.phase + b * 1.7 + hFrac * 3) * 3 * hFrac);
+        const xoff = Math.round(Math.sin(t * 0.9 + pl.phase + b * 1.7 + hFrac * 3) * 3.5 * hFrac);
         const x = bx + xoff;
         ctx.fillStyle = pl.cols[1];
         ctx.fillRect(x, py, 1, 1);
-        if ((py & 1) === 0) {                   // leaf pairs alternating sides
+        // dense leaf fronds: a leaf every other row, alternating sides,
+        // longer toward the base and drooping at the tips
+        if ((py & 1) === 0) {
           const side = ((py >> 1) & 1) ? 1 : -1;
-          const len = (py % 6 === 0) ? 2 : 1;
+          let len = 1 + ((py % 4 === 0) ? 1 : 0) + ((py % 6 === 0) ? 1 : 0);
+          if (hFrac < 0.55 && py % 8 === 0) len++;       // extra-long lower fronds
+          if (hFrac > 0.88) len = 1;                     // slender tip
           for (let k = 1; k <= len; k++) {
+            const droop = k > 2 ? 1 : 0;
             ctx.fillStyle = (k === len) ? pl.cols[2] : pl.cols[0];
-            ctx.fillRect(x + side * k, py, 1, 1);
+            ctx.fillRect(x + side * k, py + droop, 1, 1);
           }
+          // opposite-side short leaf makes the blade read full, not zigzag
+          ctx.fillStyle = pl.cols[0];
+          ctx.fillRect(x - side, py, 1, 1);
         }
       }
     }
