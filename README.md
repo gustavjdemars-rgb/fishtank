@@ -40,9 +40,11 @@ motes glow like plankton, and the neon tetras light up.
 - **Press N** to toggle day/night manually (when running in a browser).
 - Or pin it: set `nightMode: 'day'` or `'night'` in `CONFIG`.
 
-Plus swaying kelp, a bubbling treasure chest, drifting light rays, rising
-bubble vents, dust motes, and a dithered water gradient — all rendered at a
-crisp ~480×270 internal resolution and upscaled pixel-perfect to any screen.
+Plus a sunken shipwreck — cracked hull, snapped mast, tattered sail, and air
+still seeping from the hole in its side — swaying kelp, a bubbling treasure
+chest, drifting light rays, rising bubble vents, dust motes, and a dithered
+water gradient, all rendered at a crisp ~480×270 internal resolution and
+upscaled pixel-perfect to any screen.
 
 ## Try it right now
 

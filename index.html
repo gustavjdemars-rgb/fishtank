@@ -405,6 +405,58 @@ function paintChest(set, get) {
   set(8, 7, '#c89a30'); set(9, 7, '#c89a30');
 }
 
+function paintShipwreck(set, get) {
+  const wood = ['#3a2c20', '#54402c', '#6e563a', '#8a6f4a'];
+  const deckY = x => Math.round(20 + (x - 2) * 0.09 + Math.sin(x * 0.11) * 1.2);
+  const bottomY = x => {
+    if (x > 84) return 50 - Math.round((x - 84) * (x - 84) * 0.075); // bow sweeps up
+    if (x < 14) return 50 - Math.round((14 - x) * 0.6);              // rounded stern
+    return 50;
+  };
+  // hull, split by a jagged crack, mossy near the keel
+  for (let x = 2; x <= 100; x++) {
+    const dY = deckY(x), bY = bottomY(x);
+    if (bY <= dY) continue;
+    for (let y = dY; y <= bY; y++) {
+      if (x >= 62 && x <= 66 && y < 40 + (x - 62) * 2.5) continue;   // the crack
+      let c = wood[1 + (Math.floor((y - dY) / 4) % 2)];              // plank strakes
+      if (y === dY || y === dY + 1) c = wood[3];                     // deck edge
+      if (x % 11 === 0) c = wood[0];                                 // plank seams
+      if (y > bY - 5 && ((x * 7 + y * 5) % 6) < 2) c = '#3f6a4a';    // keel moss
+      if (((x * 11 + y * 3) % 23) === 0) c = '#2c4f3a';              // algae specks
+      set(x, y, c);
+    }
+  }
+  // gaping hole in the hull
+  fillEllipse(set, 38, 44, 8, 5, () => '#100e0c');
+  // portholes
+  for (const px of [16, 28, 44, 78, 92]) {
+    const py = deckY(px) + 8;
+    for (let dx = 0; dx < 3; dx++) for (let dy = 0; dy < 3; dy++) {
+      set(px + dx, py + dy, (dx === 1 && dy === 1) ? '#1c2a30' : '#12100c');
+    }
+    set(px - 1, py, wood[3]); set(px + 3, py + 2, wood[0]);
+  }
+  // railing posts with broken gaps
+  for (let x = 4; x <= 98; x += 8) {
+    if (x % 5 === 0) continue;
+    const dY = deckY(x);
+    set(x, dY - 1, wood[2]); set(x, dY - 2, wood[1]); set(x, dY - 3, wood[1]);
+  }
+  // snapped mast (jagged top) with yardarm and a tattered sail
+  const mastX = 50;
+  for (let y = 4; y < deckY(mastX); y++) set(mastX, y, wood[2]);
+  for (let y = 6; y < deckY(mastX); y++) set(mastX + 1, y, wood[1]);
+  for (let y = 9; y < deckY(mastX); y++) set(mastX + 2, y, wood[0]);
+  for (let x = mastX - 14; x <= mastX - 1; x++) set(x, 10, wood[1]);
+  for (let x = mastX - 14; x <= mastX - 2; x++) {
+    const len = 3 + ((x * 5) % 4);
+    for (let k = 1; k <= len; k++) if (((x + k) & 1) === 0) set(x, 10 + k, '#a8a08c');
+  }
+  // bowsprit
+  for (let k = 0; k < 5; k++) set(97 + k, deckY(97) - 2 - k, k > 3 ? wood[1] : wood[2]);
+}
+
 function paintPellet(set) {
   set(0, 0, '#b58048'); set(1, 0, '#8a5a2b'); set(2, 0, '#8a5a2b');
   set(0, 1, '#8a5a2b'); set(1, 1, '#9c6832'); set(2, 1, '#6f4721');
@@ -432,6 +484,7 @@ for (const name in SPECIES) {
 SPECIES.puffer.altSprite = buildSprite(18, 15, paintPufferPuffed, SPECIES.puffer.outline);
 const PELLET_SPRITE = buildSprite(3, 3, paintPellet, null);
 const CHEST_SPRITE = buildSprite(18, 13, paintChest, '#3a2410');
+const WRECK_SPRITE = buildSprite(104, 54, paintShipwreck, '#241a10');
 
 /* ============================== fish ==================================== */
 const fish = [];
@@ -715,6 +768,7 @@ let vents = [];
 let motes = [];
 let rays = [];
 let chestX = 0, chestY = 0, chestBurpT = 8;
+let wreckX = 0, wreckY = 0, wreckBubbleT = 5;
 
 let night = false;
 let nightCheckT = 0;
@@ -825,6 +879,8 @@ function initDecor() {
   }
   chestX = Math.round(W * 0.72);
   chestY = groundY - 11;
+  wreckX = Math.max(2, Math.round(W * 0.15) - 52);   // hull sits half-buried
+  wreckY = groundY - 46;
 }
 
 function drawRays() {
@@ -907,6 +963,13 @@ function updateEnvironment(dt) {
       spawnBubble(v.x + rand(-2, 2), groundY - 1, Math.random() < 0.4 ? 2 : 1);
     }
   }
+  wreckBubbleT -= dt;
+  if (wreckBubbleT <= 0) {                 // air still seeps from the hull hole
+    wreckBubbleT = rand(5, 12);
+    for (let i = 0; i < 3; i++) {
+      setTimeout(() => spawnBubble(wreckX + 38 + rand(-5, 5), wreckY + 42, Math.random() < 0.5 ? 2 : 1), i * 140);
+    }
+  }
   chestBurpT -= dt;
   if (chestBurpT <= 0) {
     chestBurpT = rand(7, 15);
@@ -972,6 +1035,7 @@ tetras = fish.filter(f => f.sp.school);
 function render() {
   ctx.drawImage(bgCanvas, 0, 0);
   drawRays();
+  ctx.drawImage(WRECK_SPRITE, wreckX, wreckY);
   ctx.drawImage(CHEST_SPRITE, chestX, chestY);
   drawPlants();
   drawMotes();
