@@ -17,11 +17,28 @@ no image files (every sprite is generated from pixel maps in the code).
 
 | Resident | Personality |
 |---|---|
-| Goldfish ×4 | Round-bodied mid-water cruisers with flowy double tails |
-| Neon tetras ×8 | Tiny, quick, and they school together |
-| Angelfish ×3 | Tall striped fins, slow and graceful |
-| Clownfish ×4 | Stripey and darty |
+| Goldfish ×3 | Round-bodied mid-water cruisers with flowy double tails |
+| Neon tetras ×8 | Tiny, quick, and they school together — their stripes glow at night |
+| Angelfish ×2 | Tall striped fins, slow and graceful |
+| Clownfish ×3 | Stripey and darty |
 | Plecos ×2 | Bottom-dwellers that hug the gravel and wait for food to sink |
+| Bettas ×2 | Violet show-offs trailing huge magenta fins |
+| Guppies ×5 | Small iridescent zippers with fancy spotted tails |
+| Pufferfish ×1 | Slow and round — spook it and it inflates into a spiky ball |
+| Seahorses ×2 | Upright drifters that bob gently near the kelp |
+
+Every species count lives in `CONFIG.fishCounts` — set any to 0 to remove it,
+or crank it up for a crowd.
+
+## Night mode 🌙
+
+The tank follows your clock: from 8pm to 7am the water turns deep navy, the
+sun rays become pale moonbeams, the fish slow to a sleepy drift, the dust
+motes glow like plankton, and the neon tetras light up.
+
+- **Auto by default** — configure the hours via `nightStartHour` / `nightEndHour`.
+- **Press N** to toggle day/night manually (when running in a browser).
+- Or pin it: set `nightMode: 'day'` or `'night'` in `CONFIG`.
 
 Plus swaying kelp, a bubbling treasure chest, drifting light rays, rising
 bubble vents, dust motes, and a dithered water gradient — all rendered at a

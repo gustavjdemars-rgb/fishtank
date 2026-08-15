@@ -24,7 +24,16 @@
  * ======================================================================== */
 const CONFIG = {
   logicalHeight: 270,     // internal pixel-art resolution (height)
-  fishCounts: { goldfish: 4, tetra: 8, angelfish: 3, clownfish: 4, pleco: 2 },
+  // How many of each species live in the tank. Set any to 0 to remove it.
+  fishCounts: {
+    goldfish: 3, tetra: 8, angelfish: 2, clownfish: 3, pleco: 2,
+    betta: 2, guppy: 5, puffer: 1, seahorse: 2,
+  },
+  // Night mode: 'auto' follows your clock, or force 'day' / 'night'.
+  // Press N to toggle manually when running in a browser.
+  nightMode: 'auto',
+  nightStartHour: 20,     // auto mode: night begins at 8pm...
+  nightEndHour: 7,        // ...and ends at 7am
   fleeRadius: 48,         // fish inside this range of the cursor swim away
   panicRadius: 22,        // very close cursor => startled speed burst
   foodSenseRadius: 165,   // fish inside this range of a pellet swim to it
@@ -259,6 +268,117 @@ function paintPleco(set, get) {
   set(20, 3, '#101008'); set(20, 2, '#c9c090');
 }
 
+function paintBetta(set, get) {
+  const finD = '#c8388a', finL = '#f070b8';
+  // huge flowing tail
+  for (let x = 0; x <= 8; x++) {
+    const tv = (8 - x) / 8;
+    const spread = 2 + Math.round(tv * 5.5);
+    for (let dy = -spread; dy <= spread; dy++) set(x, 8 + dy, ((x + dy) & 1) ? finD : finL);
+  }
+  for (let x = 0; x <= 8; x++) for (let dy = -7; dy <= 7; dy++) {   // ray streaks
+    if (((x + dy * 2) % 5 === 0) && get(x, 8 + dy)) set(x, 8 + dy, '#a02468');
+  }
+  fillEllipse(set, 14.5, 8, 6, 3.6, shadeRamp(['#4a2a7a', '#6a3aa0', '#8a4cc0', '#aa66d8', '#d090f0']));
+  // long flowy dorsal + anal fins
+  for (let x = 10; x <= 18; x++) {
+    const u = (x - 14.5) / 6;
+    const half = 3.6 * Math.sqrt(Math.max(0, 1 - u * u));
+    const dh = 2 + ((x & 2) ? 1 : 0);
+    for (let k = 1; k <= dh; k++) set(x, Math.round(8 - half) - k, (k === dh) ? finD : finL);
+    const ah = 2 + ((x & 1) ? 1 : 0);
+    for (let k = 1; k <= ah; k++) set(x, Math.round(8 + half) + k, (k === ah) ? finD : finL);
+  }
+  // ventral streamer
+  set(12, 13, finL); set(12, 14, finD); set(11, 15, finD);
+  // eye + mouth
+  set(18, 7, '#ffffff'); set(19, 7, '#14060f');
+  set(20, 8, '#38104a');
+}
+
+function paintGuppy(set, get) {
+  const tD = '#e8712c', tM = '#ffa040', tL = '#ffd070';
+  for (let x = 0; x <= 4; x++) {                          // fancy fan tail
+    const tv = (4 - x) / 4;
+    const s = 1 + Math.round(tv * 3);
+    for (let dy = -s; dy <= s; dy++) set(x, 4 + dy, ((x + dy) & 1) ? tM : tL);
+  }
+  for (let x = 0; x <= 4; x++) for (let dy = -4; dy <= 4; dy++) {   // tail spots
+    if (((x * 3 + dy * 5) % 7 === 0) && get(x, 4 + dy)) set(x, 4 + dy, tD);
+  }
+  fillEllipse(set, 8.5, 4.5, 4.6, 2.3, shadeRamp(['#4e6e80', '#6f95a8', '#9fc4d2', '#cfe6ee', '#effafc']));
+  // iridescent teal sheen on the shoulder
+  set(8, 3, '#5fc8c0'); set(9, 3, '#7fe8d8'); set(10, 3, '#7fe8d8');
+  // little dorsal
+  set(8, 1, tM); set(9, 1, tL); set(9, 2, tM);
+  // eye
+  set(11, 3, '#ffffff'); set(12, 3, '#0d1a20');
+}
+
+const PUFFER_RAMP = shadeRamp(['#9a8a2e', '#c2ae44', '#dcc858', '#ecd870', '#f4e690']);
+function pufferSkin(x, y, tv) {
+  if (tv > 0.35) return ((x + y) & 1) ? '#fdf0b0' : '#efdc84';     // pale belly
+  return PUFFER_RAMP(x, y, tv);
+}
+
+function paintPuffer(set, get) {
+  fillEllipse(set, 8, 6, 6.4, 4.9, pufferSkin);
+  for (let y = 1; y <= 6; y++) for (let x = 3; x <= 13; x++) {     // dark spots
+    if (get(x, y) && ((x * 5 + y * 3) % 7 === 0)) set(x, y, '#8a7a2a');
+  }
+  // stubby tail + side fin
+  set(0, 5, '#c2ae44'); set(0, 6, '#dcc858'); set(0, 7, '#c2ae44'); set(1, 6, '#dcc858');
+  set(7, 8, '#c2ae44'); set(8, 8, '#dcc858');
+  // big cute eye
+  set(11, 2, '#ffffff'); set(11, 3, '#ffffff'); set(12, 3, '#1a1a12');
+  // mouth
+  set(14, 6, '#6e5a18'); set(14, 7, '#8a7a2a');
+}
+
+function paintPufferPuffed(set, get) {
+  fillEllipse(set, 9, 7, 7.4, 6.4, pufferSkin);
+  for (let y = 1; y <= 8; y++) for (let x = 3; x <= 15; x++) {
+    if (get(x, y) && ((x * 5 + y * 3) % 7 === 0)) set(x, y, '#8a7a2a');
+  }
+  for (let a = 0; a < 12; a++) {                          // spikes!
+    const ang = a / 12 * Math.PI * 2;
+    set(Math.round(9 + Math.cos(ang) * 8.3), Math.round(7 + Math.sin(ang) * 7.2), '#8a7a2a');
+  }
+  // wide startled eye + tiny "o" mouth
+  set(12, 3, '#ffffff'); set(12, 4, '#ffffff'); set(13, 4, '#1a1a12');
+  set(16, 7, '#6e5a18');
+}
+
+function paintFromMap(rows, pal) {
+  return (set) => {
+    rows.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) if (pal[row[x]]) set(x, y, pal[row[x]]);
+    });
+  };
+}
+
+const paintSeahorse = paintFromMap([
+  '..dmm.....',
+  '.dmmlesss.',
+  '.dmmll....',
+  '..dmm.....',
+  '..dmml....',
+  'fdmmlll...',
+  'fdmmllll..',
+  'fdmmllll..',
+  'fdmmlll...',
+  '..dmmll...',
+  '..dmml....',
+  '..dmm.....',
+  '...dmm....',
+  '...dmm....',
+  '....dmm...',
+  '...dm.....',
+], {
+  d: '#a3552e', m: '#e08448', l: '#f8b878',
+  s: '#c96a3a', e: '#2b1608', f: '#ffd9a8',
+});
+
 function paintChest(set, get) {
   // rounded lid
   const insets = [4, 2, 1, 0, 0];
@@ -298,12 +418,18 @@ const SPECIES = {
   angelfish: { w: 20, h: 26, paint: paintAngelfish, outline: '#4c565f', cruise: 9,  max: 21, accel: 38, wiggle: 1.1, band: [0.18, 0.68], mouthDy: 0 },
   clownfish: { w: 18, h: 11, paint: paintClownfish, outline: '#2a1408', cruise: 15, max: 38, accel: 75, wiggle: 1.5, band: [0.25, 0.82], mouthDy: 0 },
   pleco:     { w: 24, h: 10, paint: paintPleco,     outline: '#33301f', cruise: 3,  max: 16, accel: 25, wiggle: 0.5, band: [0.96, 1.0],  mouthDy: 4, fleeR: 18, bottom: true },
+  betta:     { w: 22, h: 16, paint: paintBetta,     outline: '#3a1230', cruise: 10, max: 26, accel: 50, wiggle: 2.0, band: [0.15, 0.70], mouthDy: 0 },
+  guppy:     { w: 14, h: 9,  paint: paintGuppy,     outline: '#2c4652', cruise: 16, max: 40, accel: 80, wiggle: 1.3, band: [0.15, 0.70], mouthDy: 0 },
+  puffer:    { w: 16, h: 13, paint: paintPuffer,    outline: '#5c4e14', cruise: 8,  max: 22, accel: 45, wiggle: 0.8, band: [0.30, 0.85], mouthDy: 0 },
+  seahorse:  { w: 10, h: 16, paint: paintSeahorse,  outline: '#6e3418', cruise: 4,  max: 9,  accel: 18, wiggle: 0,   band: [0.45, 0.95], mouthDy: -6, bob: true },
 };
 for (const name in SPECIES) {
   const sp = SPECIES[name];
   sp.name = name;
   sp.sprite = buildSprite(sp.w, sp.h, sp.paint, sp.outline);
 }
+// the pufferfish inflates while startled
+SPECIES.puffer.altSprite = buildSprite(18, 15, paintPufferPuffed, SPECIES.puffer.outline);
 const PELLET_SPRITE = buildSprite(3, 3, paintPellet, null);
 const CHEST_SPRITE = buildSprite(18, 13, paintChest, '#3a2410');
 
@@ -338,7 +464,7 @@ class Fish {
   update(dt) {
     const sp = this.sp;
     let ax = 0, ay = 0;
-    let maxSpeed = sp.cruise;
+    let maxSpeed = sp.cruise * (night ? 0.55 : 1);   // fish drowse after dark
 
     // --- wander toward a roaming target
     this.targetT -= dt;
@@ -453,8 +579,11 @@ class Fish {
   }
 
   draw() {
-    const sp = this.sp, spr = sp.sprite, w = sp.w, h = sp.h;
-    const bx = Math.round(this.x - w / 2), by = Math.round(this.y - h / 2);
+    const sp = this.sp;
+    const spr = (sp.altSprite && this.startleT > 0) ? sp.altSprite : sp.sprite;
+    const w = spr.width, h = spr.height;
+    const bob = sp.bob ? Math.round(Math.sin(this.phase * 0.7) * 1.5) : 0;
+    const bx = Math.round(this.x - w / 2), by = Math.round(this.y - h / 2) + bob;
     // column-sheared draw: the tail end wiggles, the head stays steady
     for (let col = 0; col < w; col++) {
       const srcX = this.facing === 1 ? col : w - 1 - col;
@@ -587,7 +716,18 @@ let motes = [];
 let rays = [];
 let chestX = 0, chestY = 0, chestBurpT = 8;
 
+let night = false;
+let nightCheckT = 0;
+
+function computeNight() {
+  if (CONFIG.nightMode === 'day') return false;
+  if (CONFIG.nightMode === 'night') return true;
+  const h = new Date().getHours();
+  return h >= CONFIG.nightStartHour || h < CONFIG.nightEndHour;
+}
+
 const WATER_STOPS = ['#9fe8ee', '#7fd8e2', '#5fc0d6', '#46a5c6', '#3489b2', '#286f9c', '#1e5786', '#164370', '#10345c'];
+const NIGHT_STOPS = ['#35597c', '#2d4d70', '#264263', '#1f3757', '#192e4b', '#132540', '#0e1d35', '#0a172b', '#071122'];
 const PLANT_GREENS = [['#1e5a33', '#2f8048', '#49a862'], ['#174c3a', '#256e50', '#3b9468'], ['#5e2f44', '#7c4058', '#96536c']];
 
 function buildBackground() {
@@ -595,25 +735,28 @@ function buildBackground() {
   bgCanvas.width = W; bgCanvas.height = H;
   const g = bgCanvas.getContext('2d');
 
+  const stops = night ? NIGHT_STOPS : WATER_STOPS;
+  const dim = night ? 0.55 : 1;   // night darkens the gravel & pebbles
+
   // dithered water gradient
   for (let y = 0; y < groundY; y++) {
     for (let x = 0; x < W; x++) {
-      const f = y / groundY * (WATER_STOPS.length - 1);
+      const f = y / groundY * (stops.length - 1);
       let i = Math.floor(f);
       if ((f - i) > BAYER4[y & 3][x & 3] / 16) i++;
-      g.fillStyle = WATER_STOPS[clamp(i, 0, WATER_STOPS.length - 1)];
+      g.fillStyle = stops[clamp(i, 0, stops.length - 1)];
       g.fillRect(x, y, 1, 1);
     }
   }
-  // brighter surface band
-  g.fillStyle = '#c4f0f4';
+  // brighter surface band (moonlit at night)
+  g.fillStyle = night ? '#7fa4c9' : '#c4f0f4';
   for (let x = 0; x < W; x++) if ((x & 3) !== 3) g.fillRect(x, 0, 1, 1);
 
   // distant kelp silhouettes
   const silCount = Math.max(5, Math.round(W / 70));
   for (let s = 0; s < silCount; s++) {
     const sx = rand(6, W - 6), hgt = rand(40, 110), ph = rand(0, 9);
-    g.fillStyle = '#16465e';
+    g.fillStyle = night ? '#0d2a3c' : '#16465e';
     for (let y = groundY; y > groundY - hgt; y--) {
       const off = Math.round(Math.sin(ph + (groundY - y) * 0.06) * 3);
       g.fillRect(Math.round(sx) + off, y, 2, 1);
@@ -629,12 +772,12 @@ function buildBackground() {
       if ((f - i) > BAYER4[y & 3][x & 3] / 16) i++;
       let c = gravelRamp[clamp(i, 0, gravelRamp.length - 1)];
       if (Math.random() < 0.06) c = Math.random() < 0.5 ? '#bfa670' : '#57452a';
-      g.fillStyle = c;
+      g.fillStyle = night ? shade(c, dim) : c;
       g.fillRect(x, y, 1, 1);
     }
   }
   // gravel top highlight
-  g.fillStyle = '#c2ab74';
+  g.fillStyle = night ? shade('#c2ab74', dim) : '#c2ab74';
   for (let x = 0; x < W; x++) if ((x + (x >> 2)) & 1) g.fillRect(x, groundY, 1, 1);
 
   // pebbles
@@ -649,7 +792,8 @@ function buildBackground() {
       if (Math.abs(tv) > 1) continue;
       const half = prx * Math.sqrt(1 - tv * tv);
       for (let x = Math.round(px - half); x <= Math.round(px + half); x++) {
-        g.fillStyle = tv < -0.4 ? shade(base, 1.25) : (tv > 0.5 ? shade(base, 0.7) : base);
+        const f = tv < -0.4 ? 1.25 : (tv > 0.5 ? 0.7 : 1);
+        g.fillStyle = shade(base, f * dim);
         g.fillRect(x, y, 1, 1);
       }
     }
@@ -684,12 +828,16 @@ function initDecor() {
 }
 
 function drawRays() {
-  for (const r of rays) {
+  // at night: two pale moonbeams instead of four sun rays
+  const active = night ? rays.slice(0, 2) : rays;
+  const base = night ? 0.05 : 0.07;
+  const tint = night ? '185,212,255' : '215,242,255';
+  for (const r of active) {
     const sway = Math.sin(t * 0.12 + r.phase) * 10;
     for (let y = 0; y < groundY; y += 2) {
-      const a = 0.07 * (1 - y / groundY) * (0.7 + 0.3 * Math.sin(t * 0.6 + r.phase * 3));
+      const a = base * (1 - y / groundY) * (0.7 + 0.3 * Math.sin(t * 0.6 + r.phase * 3));
       if (a <= 0.004) continue;
-      ctx.fillStyle = `rgba(215,242,255,${a.toFixed(3)})`;
+      ctx.fillStyle = `rgba(${tint},${a.toFixed(3)})`;
       ctx.fillRect(Math.round(r.x0 + sway + y * 0.35), y, Math.round(r.w), 2);
     }
   }
@@ -722,7 +870,8 @@ function drawPlants() {
 }
 
 function drawMotes() {
-  ctx.fillStyle = 'rgba(220,240,250,0.16)';
+  // motes read as glowing plankton after dark
+  ctx.fillStyle = night ? 'rgba(140,255,210,0.30)' : 'rgba(220,240,250,0.16)';
   for (const mo of motes) {
     ctx.fillRect(Math.round(mo.x), Math.round(mo.y), 1, 1);
   }
@@ -732,7 +881,7 @@ function drawSurface() {
   for (let x = 0; x < W; x++) {
     const v = Math.sin(x * 0.7 + t * 1.3) + Math.sin(x * 0.23 - t * 0.7);
     if (v > 1.1) {
-      ctx.fillStyle = 'rgba(255,255,255,0.45)';
+      ctx.fillStyle = night ? 'rgba(205,230,255,0.35)' : 'rgba(255,255,255,0.45)';
       ctx.fillRect(x, 2, 1, 1);
       if (v > 1.6) ctx.fillRect(x, 1, 1, 1);
     }
@@ -779,6 +928,13 @@ window.addEventListener('pointerdown', e => {
   const p = toLogical(e);
   dropFood(p.x, p.y);
 });
+window.addEventListener('keydown', e => {
+  if (e.key === 'n' || e.key === 'N') {
+    CONFIG.nightMode = night ? 'day' : 'night';
+    night = !night;
+    buildBackground();
+  }
+});
 
 /* ============================ lifecycle ================================= */
 function resize() {
@@ -793,10 +949,11 @@ function resize() {
   for (const p of pellets) { p.x = clamp(p.x, 6, W - 6); p.y = clamp(p.y, 8, groundY + 2); }
 }
 window.addEventListener('resize', resize);
+night = computeNight();
 resize();
 
 // populate the tank (draw order: bottom dwellers first, small fish in front)
-for (const name of ['pleco', 'angelfish', 'goldfish', 'clownfish', 'tetra']) {
+for (const name of ['pleco', 'seahorse', 'angelfish', 'betta', 'goldfish', 'puffer', 'clownfish', 'guppy', 'tetra']) {
   for (let i = 0; i < (CONFIG.fishCounts[name] || 0); i++) fish.push(new Fish(SPECIES[name]));
 }
 tetras = fish.filter(f => f.sp.school);
@@ -812,6 +969,19 @@ function render() {
   drawBubbles();
   drawParticles();
   drawSurface();
+  if (night) {
+    // moonlight wash over everything...
+    ctx.fillStyle = 'rgba(9,16,38,0.22)';
+    ctx.fillRect(0, 0, W, H);
+    // ...except the neon tetras, whose stripes glow in the dark
+    for (const f of tetras) {
+      const gx = Math.round(f.x), gy = Math.round(f.y);
+      ctx.fillStyle = 'rgba(110,240,255,0.14)';
+      ctx.fillRect(gx - 4, gy - 3, 9, 5);
+      ctx.fillStyle = 'rgba(140,250,255,0.85)';
+      ctx.fillRect(gx - 3, gy - 1, 6, 1);
+    }
+  }
 }
 
 let last = performance.now();
@@ -820,6 +990,12 @@ function frame(now) {
   last = now;
   dt = Math.min(dt, 0.05);
   t += dt;
+  nightCheckT -= dt;
+  if (nightCheckT <= 0) {
+    nightCheckT = 10;
+    const n = computeNight();
+    if (n !== night) { night = n; buildBackground(); }
+  }
   for (const f of fish) f.update(dt);
   updatePellets(dt);
   updateBubbles(dt);
@@ -836,6 +1012,12 @@ window.__fishtank = {
   get pellets() { return pellets.filter(p => !p.dead).length; },
   get pelletsEaten() { return stats.eaten; },
   get size() { return { W, H }; },
+  get night() { return night; },
+  setNight(v) { // true | false | 'auto'
+    CONFIG.nightMode = v === true ? 'night' : v === false ? 'day' : 'auto';
+    const n = computeNight();
+    if (n !== night) { night = n; buildBackground(); }
+  },
   dropFood,
 };
 </script>
